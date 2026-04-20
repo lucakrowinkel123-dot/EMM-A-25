@@ -9,7 +9,8 @@
 // dumpgps : appends current GPS + orientation snapshot to Custom Data
 // minelane;depth : run one mining lane from anchor to depth and return
 // minearea;<gps or x,y,z>;<gps or x,y,z>;Faceup,Faceforward;depth : run distributed lanes over rectangle
-// nexthole : skip to the next generated area lane anchor
+// nexthole : back out of current hole if needed, then skip to the next generated area lane anchor
+// nexthole all : back out if needed, then jump directly to the last lane
 // cancelmine : stops mining state machine and turns drills off
 // pathstart : loads records from timer with tag in pathTimerTag and executes row-by-row
 // pathpause : pauses queue and active movement; minearea returns to current anchor and waits
@@ -86,6 +87,7 @@ enum MiningState
 }
 MiningState miningState = MiningState.Idle;
 bool miningEnabled = false;
+bool skipToLastHole = false;
 Vector3D laneAnchor = Vector3D.Zero;
 Vector3D drillAxis = Vector3D.Zero;
 double laneDepth = 0;
@@ -533,6 +535,7 @@ void RemoteCommand (string command)
             areaLaneAnchors.Clear();
             areaLaneIndex = 0;
             retryCurrentLane = false;
+            skipToLastHole = false;
             stuckRetryCount = 0;
             pathMode = false;
             pathPaused = false;
@@ -563,12 +566,16 @@ void RemoteCommand (string command)
             areaLaneAnchors.Clear();
             areaLaneIndex = 0;
             retryCurrentLane = false;
+            skipToLastHole = false;
             activeMaxSpeed = 0;
             SetDrills(false);
             Echo("Mining cancelled.");
             break;
         case "nexthole":
-            NextHole();
+            NextHole(false);
+            break;
+        case "nexthole all":
+            NextHole(true);
             break;
         case "pathstart":
             StartPathFromTimer();
@@ -642,6 +649,12 @@ void RemoteCommand (string command)
             break;
         }
         case "dock":
+            if (pathRecordingEnabled)
+            {
+                if (!AppendPathRecordLine("dock"))
+                    Echo($"Warning: could not write 'dock' to timer '{pathTimerTag}'; timer not found.");
+                StopPathRecording();
+            }
             StartDock();
             break;
         case "undock":
@@ -1934,11 +1947,20 @@ void UpdateMiningState()
                 else if (areaMiningMode && areaLaneIndex + 1 < areaLaneAnchors.Count)
                 {
                     stuckRetryCount = 0;
-                    areaLaneIndex++;
+                    if (skipToLastHole)
+                    {
+                        skipToLastHole = false;
+                        areaLaneIndex = areaLaneAnchors.Count - 1;
+                        Echo($"Skipped to last hole ({areaLaneAnchors.Count}/{areaLaneAnchors.Count})");
+                    }
+                    else
+                    {
+                        areaLaneIndex++;
+                        Echo($"Proceeding to lane {areaLaneIndex + 1}/{areaLaneAnchors.Count}");
+                    }
                     laneAnchor = areaLaneAnchors[areaLaneIndex];
                     ResetDepthAutoTracker();
                     miningState = MiningState.EnterLane;
-                    Echo($"Proceeding to lane {areaLaneIndex + 1}/{areaLaneAnchors.Count}");
                 }
                 else
                 {
@@ -2093,14 +2115,15 @@ bool CheckStuckInLane()
     return false;
 }
 
-void NextHole()
+void NextHole(bool skipToLast = false)
 {
     if (areaLaneAnchors.Count == 0)
     {
         Echo("No area plan loaded. Start with minearea first.");
         return;
     }
-    if (areaLaneIndex + 1 >= areaLaneAnchors.Count)
+    int targetIndex = skipToLast ? areaLaneAnchors.Count - 1 : areaLaneIndex + 1;
+    if (targetIndex >= areaLaneAnchors.Count || targetIndex <= areaLaneIndex)
     {
         Echo("Already at last hole.");
         return;
@@ -2108,18 +2131,32 @@ void NextHole()
 
     SetDrills(false);
     stuckRetryCount = 0;
-    areaLaneIndex++;
+    retryCurrentLane = false;
     areaMiningMode = true;
-    laneAnchor = areaLaneAnchors[areaLaneIndex];
-    targetPosition = laneAnchor;
-    desiredForward = drillAxis.LengthSquared() > 0.001 ? drillAxis : rc.WorldMatrix.Forward;
-    activeMaxSpeed = SPEEDB;
-    hasTarget = true;
     autopilotEnabled = true;
     miningEnabled = true;
-    miningState = MiningState.EnterLane;
-    retryCurrentLane = false;
-    Echo($"Next hole {areaLaneIndex + 1}/{areaLaneAnchors.Count}");
+
+    if (miningState == MiningState.DrillForward)
+    {
+        skipToLastHole = skipToLast;
+        miningState = MiningState.Backout;
+        string dest = skipToLast
+            ? $"last hole ({areaLaneAnchors.Count}/{areaLaneAnchors.Count})"
+            : $"hole {areaLaneIndex + 2}/{areaLaneAnchors.Count}";
+        Echo($"Backing out before advancing to {dest}...");
+    }
+    else
+    {
+        areaLaneIndex = targetIndex;
+        skipToLastHole = false;
+        laneAnchor = areaLaneAnchors[areaLaneIndex];
+        targetPosition = laneAnchor;
+        desiredForward = drillAxis.LengthSquared() > 0.001 ? drillAxis : rc.WorldMatrix.Forward;
+        activeMaxSpeed = SPEEDB;
+        hasTarget = true;
+        miningState = MiningState.EnterLane;
+        Echo($"Advancing to hole {areaLaneIndex + 1}/{areaLaneAnchors.Count}");
+    }
 }
 
 bool IsAtTargetPosition(Vector3D target, double toleranceMeters = -1)
