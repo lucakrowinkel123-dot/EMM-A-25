@@ -1964,30 +1964,7 @@ void UpdateMiningState()
                 }
                 else
                 {
-                    miningEnabled = false;
-                    miningState = MiningState.Idle;
-                    areaMiningMode = false;
-                    areaLaneAnchors.Clear();
-                    areaLaneIndex = 0;
-                    if (autoMinedFromPathRecord)
-                    {
-                        autoMinedFromPathRecord = false;
-                        targetPosition = pathRecordMineEntry;
-                        desiredUp = pathRecordMineUp;
-                        desiredForward = pathRecordMineForward;
-                        hasTarget = true;
-                        autopilotEnabled = true;
-                        activeMaxSpeed = SPEEDB;
-                        pathRecordingWaitReturn = true;
-                        pathRecordMineStage = PathRecordMineStage.ReturningToEntry;
-                        Echo("Mining complete. Returning to mine pose...");
-                    }
-                    else
-                    {
-                        autopilotEnabled = false;
-                        activeMaxSpeed = 0;
-                        Echo("Mining operation complete.");
-                    }
+                    FinishAreaMining();
                 }
             }
             break;
@@ -2115,6 +2092,35 @@ bool CheckStuckInLane()
     return false;
 }
 
+void FinishAreaMining()
+{
+    miningEnabled = false;
+    miningState = MiningState.Idle;
+    areaMiningMode = false;
+    areaLaneAnchors.Clear();
+    areaLaneIndex = 0;
+    skipToLastHole = false;
+    if (autoMinedFromPathRecord)
+    {
+        autoMinedFromPathRecord = false;
+        targetPosition = pathRecordMineEntry;
+        desiredUp = pathRecordMineUp;
+        desiredForward = pathRecordMineForward;
+        hasTarget = true;
+        autopilotEnabled = true;
+        activeMaxSpeed = SPEEDB;
+        pathRecordingWaitReturn = true;
+        pathRecordMineStage = PathRecordMineStage.ReturningToEntry;
+        Echo("Mining complete. Returning to mine pose...");
+    }
+    else
+    {
+        autopilotEnabled = false;
+        activeMaxSpeed = 0;
+        Echo("Mining operation complete.");
+    }
+}
+
 void NextHole(bool skipToLast = false)
 {
     if (areaLaneAnchors.Count == 0)
@@ -2123,15 +2129,30 @@ void NextHole(bool skipToLast = false)
         return;
     }
     int targetIndex = skipToLast ? areaLaneAnchors.Count - 1 : areaLaneIndex + 1;
-    if (targetIndex >= areaLaneAnchors.Count || targetIndex <= areaLaneIndex)
-    {
-        Echo("Already at last hole.");
-        return;
-    }
+    bool atLastLane = targetIndex >= areaLaneAnchors.Count || targetIndex <= areaLaneIndex;
 
     SetDrills(false);
     stuckRetryCount = 0;
     retryCurrentLane = false;
+
+    if (atLastLane)
+    {
+        if (miningState == MiningState.DrillForward)
+        {
+            areaMiningMode = true;
+            autopilotEnabled = true;
+            miningEnabled = true;
+            skipToLastHole = false;
+            miningState = MiningState.Backout;
+            Echo("Backing out before finishing mining...");
+        }
+        else
+        {
+            FinishAreaMining();
+        }
+        return;
+    }
+
     areaMiningMode = true;
     autopilotEnabled = true;
     miningEnabled = true;
