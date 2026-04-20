@@ -137,6 +137,7 @@ enum PathRecordMineStage
     ReturningToEntry
 }
 PathRecordMineStage pathRecordMineStage = PathRecordMineStage.Idle;
+bool autoMinedFromPathRecord = false;
 Vector3D stuckSamplePos = Vector3D.Zero;
 double stuckNoMoveSeconds = 0;
 int stuckRetryCount = 0;
@@ -542,6 +543,7 @@ void RemoteCommand (string command)
             pathRecordingPaused = false;
             pathRecordingWaitReturn = false;
             pathRecordMineStage = PathRecordMineStage.Idle;
+            autoMinedFromPathRecord = false;
             dockingState = DockingState.None;
             SetCockpitGyroControl(true);
             activeMaxSpeed = 0;
@@ -714,6 +716,7 @@ void StopPathRecording()
     pathRecordingPaused = false;
     pathRecordingWaitReturn = false;
     pathRecordMineStage = PathRecordMineStage.Idle;
+    autoMinedFromPathRecord = false;
     SetCockpitGyroControl(true);
     SetMineIndicatorSensor(false);
     Echo("Path recording stopped.");
@@ -739,13 +742,11 @@ bool UpdatePathRecordState()
             autopilotEnabled = false;
             hasTarget = false;
             pathRecordingWaitReturn = false;
-            pathRecordingPaused = false;
             pathRecordMineStage = PathRecordMineStage.Idle;
             pathRecordLastPos = rc.GetPosition();
             SetCockpitGyroControl(true);
             SetMineIndicatorSensor(false);
-            Echo("Returned to mine entry. Path recording resumed.");
-            // Auto-start area mining for the area just recorded
+            // Auto-start area mining for the area just recorded (corners cleared after to prevent re-trigger)
             if ((pathRecordMineCornerB - pathRecordMineCornerA).LengthSquared() > 0.01)
             {
                 string mineCmd = "minearea;" + BuildMineAreaRecord(
@@ -754,8 +755,16 @@ bool UpdatePathRecordState()
                     pathRecordMineDepth, pathRecordMineCounter);
                 StartAreaMining(mineCmd);
                 if (miningEnabled)
+                {
+                    autoMinedFromPathRecord = true;
+                    pathRecordMineCornerA = Vector3D.Zero;
+                    pathRecordMineCornerB = Vector3D.Zero;
                     Echo("Auto-started minearea for recorded area.");
+                    return false;
+                }
             }
+            pathRecordingPaused = false;
+            Echo("Returned to mine entry. Path recording resumed.");
         }
         return false;
     }
@@ -1935,12 +1944,28 @@ void UpdateMiningState()
                 {
                     miningEnabled = false;
                     miningState = MiningState.Idle;
-                    autopilotEnabled = false;
-                    activeMaxSpeed = 0;
                     areaMiningMode = false;
                     areaLaneAnchors.Clear();
                     areaLaneIndex = 0;
-                    Echo("Mining operation complete.");
+                    if (autoMinedFromPathRecord)
+                    {
+                        autoMinedFromPathRecord = false;
+                        targetPosition = pathRecordMineEntry;
+                        desiredUp = pathRecordMineUp;
+                        desiredForward = pathRecordMineForward;
+                        hasTarget = true;
+                        autopilotEnabled = true;
+                        activeMaxSpeed = SPEEDB;
+                        pathRecordingWaitReturn = true;
+                        pathRecordMineStage = PathRecordMineStage.ReturningToEntry;
+                        Echo("Mining complete. Returning to mine pose...");
+                    }
+                    else
+                    {
+                        autopilotEnabled = false;
+                        activeMaxSpeed = 0;
+                        Echo("Mining operation complete.");
+                    }
                 }
             }
             break;
