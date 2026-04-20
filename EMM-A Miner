@@ -649,6 +649,12 @@ void RemoteCommand (string command)
             break;
         }
         case "dock":
+            if (pathRecordingEnabled)
+            {
+                if (!AppendPathRecordLine("dock"))
+                    Echo($"Warning: could not write 'dock' to timer '{pathTimerTag}'; timer not found.");
+                StopPathRecording();
+            }
             StartDock();
             break;
         case "undock":
