@@ -265,6 +265,7 @@ void RemoteCommand(string command)
         }
         hasTarget        = true;
         autopilotEnabled = true;
+        Runtime.UpdateFrequency = tickSpeed;
         WriteEcho();
         return;
     }
@@ -880,6 +881,7 @@ void HandleGoTo(string argument)
     desiredUp        = savedUp;
     hasTarget        = true;
     autopilotEnabled = true;
+    Runtime.UpdateFrequency = tickSpeed;
     goToMode         = true;
     goToStage        = 1;
     pathMode         = false;
