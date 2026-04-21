@@ -20,6 +20,8 @@
 //                Sends PathClear to the miner after saving.
 // LoadAsteroid <n> : load the path records from the saved Asteroid record <n> (e.g. 002)
 //                    into the miner's "EMM-A Mi Path" timer, replacing its current content.
+// GoTo <n>         : approach saved Asteroid <n> from a safe side-point, then fly/align to saved
+//                    carrier pose while avoiding the asteroid bubble around the saved site.
 // =====================================
 
 // ========== Editable Script Settings ==========
@@ -44,6 +46,9 @@ string zoneDbTimerTag    = "EMM-A Ca Zone DB";     // exact name of the Zone DB 
 string minerContainerTag = "EMM-A Mi ";            // name tag for miner cargo containers
 string minerPbTag        = "EMM-A Mi Prog. Block (Miner)";          // name tag for the miner's programmable block
 string asteroidHeaderLine = "------------------------------------------------------------------------------------------------";
+double goToLeadDistanceMeters = 1000;
+double goToBubbleOffsetMeters = 150;
+double goToBubbleRadiusMeters = 750;
 // =============================================
 
 IMyShipController rc;
@@ -71,6 +76,9 @@ readonly int echoFrequency = 100;
 int runtime            = 0;
 IMyTimerBlock _cachedPathTimer;
 IMyTimerBlock _cachedZoneDbTimer;
+
+bool goToMode = false;
+int goToStage = 0; // 1 = flying to safe side-point, 2 = final approach to saved carrier pose
 
 public Program()
 {
@@ -123,6 +131,7 @@ public void Main(string argument, UpdateType updateSource)
         else
             ResetMovement();
 
+        UpdateGoToRunner();
         UpdatePathRunner();
         runtime++;
     }
@@ -256,6 +265,7 @@ void RemoteCommand(string command)
         }
         hasTarget        = true;
         autopilotEnabled = true;
+        Runtime.UpdateFrequency = tickSpeed;
         WriteEcho();
         return;
     }
@@ -279,6 +289,12 @@ void RemoteCommand(string command)
         return;
     }
 
+    if (trimmed.StartsWith("goto ", StringComparison.OrdinalIgnoreCase))
+    {
+        HandleGoTo(trimmed);
+        return;
+    }
+
     switch (trimmed.ToLower())
     {
         case "stop":
@@ -296,6 +312,8 @@ void RemoteCommand(string command)
             hasTarget           = false;
             desiredForward      = Vector3D.Zero;
             desiredUp           = Vector3D.Zero;
+            goToMode            = false;
+            goToStage           = 0;
             pathMode            = false;
             pathPaused          = false;
             pathPausedNavResume = false;
@@ -812,6 +830,140 @@ void LoadAsteroid(string argument)
     pathTimer.CustomData = sb.ToString();
 
     Echo($"LoadAsteroid: Asteroid {label} loaded to miner path timer ({pathLines.Count} records).");
+}
+
+void HandleGoTo(string argument)
+{
+    string[] parts = argument.Split(new[] { ' ' }, 2, StringSplitOptions.RemoveEmptyEntries);
+    if (parts.Length < 2)
+    {
+        Echo("Usage: GoTo <number>  e.g. GoTo 032");
+        return;
+    }
+
+    int asteroidNum;
+    if (!int.TryParse(parts[1].Trim(), out asteroidNum) || asteroidNum < 1)
+    {
+        Echo($"GoTo: invalid number '{parts[1].Trim()}'.");
+        return;
+    }
+
+    Vector3D savedPos, savedForward, savedUp;
+    if (!TryGetCarrierPoseFromZoneDb(asteroidNum, out savedPos, out savedForward, out savedUp))
+    {
+        Echo($"GoTo: asteroid {asteroidNum:D3} not found in Zone DB.");
+        return;
+    }
+
+    if (savedForward.LengthSquared() < 0.001 || savedUp.LengthSquared() < 0.001)
+    {
+        Echo($"GoTo: asteroid {asteroidNum:D3} saved carrier orientation is invalid.");
+        return;
+    }
+
+    Vector3D currentPos = rc.GetPosition();
+    Vector3D frontPoint = savedPos + savedForward * goToLeadDistanceMeters;
+    Vector3D backPoint  = savedPos - savedForward * goToLeadDistanceMeters;
+    Vector3D bubbleCenter = savedPos - savedUp * goToBubbleOffsetMeters;
+
+    bool frontIntersects = SegmentIntersectsSphere(currentPos, frontPoint, bubbleCenter, goToBubbleRadiusMeters);
+    bool backIntersects  = SegmentIntersectsSphere(currentPos, backPoint, bubbleCenter, goToBubbleRadiusMeters);
+
+    if (frontIntersects && backIntersects)
+    {
+        Echo($"GoTo: both approach lines intersect asteroid bubble (r={goToBubbleRadiusMeters:0}).");
+        return;
+    }
+
+    Vector3D chosenPoint = frontIntersects ? backPoint : frontPoint;
+    targetPosition   = chosenPoint;
+    desiredForward   = Vector3D.Zero;
+    desiredUp        = savedUp;
+    hasTarget        = true;
+    autopilotEnabled = true;
+    Runtime.UpdateFrequency = tickSpeed;
+    goToMode         = true;
+    goToStage        = 1;
+    pathMode         = false;
+    pathPaused       = false;
+    pathPausedNavResume = false;
+    pathRecords.Clear();
+    pathIndex = 0;
+
+    _goToFinalPosition = savedPos;
+    _goToFinalForward  = savedForward;
+    _goToFinalUp       = savedUp;
+
+    Echo($"GoTo: Asteroid {asteroidNum:D3} using {(frontIntersects ? "rear" : "front")} approach point.");
+}
+
+Vector3D _goToFinalPosition = Vector3D.Zero;
+Vector3D _goToFinalForward  = Vector3D.Zero;
+Vector3D _goToFinalUp       = Vector3D.Zero;
+
+void UpdateGoToRunner()
+{
+    if (!goToMode || !autopilotEnabled || !hasTarget)
+        return;
+
+    if (goToStage == 1 && IsAtTargetPosition(targetPosition))
+    {
+        targetPosition = _goToFinalPosition;
+        desiredForward = _goToFinalForward;
+        desiredUp      = _goToFinalUp;
+        goToStage      = 2;
+        Echo("GoTo: side-point reached. Starting final approach.");
+        return;
+    }
+
+    if (goToStage == 2 && IsAtTargetPose(_goToFinalPosition, _goToFinalForward, _goToFinalUp))
+    {
+        goToMode      = false;
+        goToStage     = 0;
+        Echo("GoTo: final pose reached.");
+    }
+}
+
+bool TryGetCarrierPoseFromZoneDb(int asteroidNum, out Vector3D pos, out Vector3D forward, out Vector3D up)
+{
+    pos = Vector3D.Zero;
+    forward = Vector3D.Zero;
+    up = Vector3D.Zero;
+
+    IMyTimerBlock zoneDb = FindZoneDbTimer();
+    if (zoneDb == null)
+        return false;
+
+    string[] lines = (zoneDb.CustomData ?? "").Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+    string label = asteroidNum.ToString("D3");
+    for (int i = 0; i < lines.Length - 1; i++)
+    {
+        if (!string.Equals(lines[i].Trim(), label, StringComparison.OrdinalIgnoreCase))
+            continue;
+
+        Vector3D gps, f, u;
+        if (TryParseGpsCommand(lines[i + 1].Trim(), out gps, out f, out u))
+        {
+            pos = gps;
+            forward = f;
+            up = u;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool SegmentIntersectsSphere(Vector3D a, Vector3D b, Vector3D center, double radius)
+{
+    Vector3D ab = b - a;
+    double abLenSq = ab.LengthSquared();
+    if (abLenSq < 1e-6)
+        return Vector3D.DistanceSquared(a, center) <= radius * radius;
+
+    double t = Vector3D.Dot(center - a, ab) / abLenSq;
+    t = MathHelper.Clamp(t, 0, 1);
+    Vector3D closest = a + ab * t;
+    return Vector3D.DistanceSquared(closest, center) <= radius * radius;
 }
 
 // Extracts only the path lines for the given asteroid number from a DB timer's CustomData.
