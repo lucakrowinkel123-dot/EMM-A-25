@@ -1069,6 +1069,11 @@ void SaveState()
     sb.AppendLine("pathPaused="         + (pathPaused ? "1" : "0"));
     sb.AppendLine("pathPausedNavResume=" + (pathPausedNavResume ? "1" : "0"));
     sb.AppendLine("pathIndex="          + pathIndex);
+    sb.AppendLine("goToMode="           + (goToMode ? "1" : "0"));
+    sb.AppendLine("goToStage="          + goToStage);
+    sb.AppendLine("goToFinalPosition="  + V3ToString(_goToFinalPosition));
+    sb.AppendLine("goToFinalForward="   + V3ToString(_goToFinalForward));
+    sb.AppendLine("goToFinalUp="        + V3ToString(_goToFinalUp));
     sb.AppendLine("pathCount="          + pathRecords.Count);
     for (int i = 0; i < pathRecords.Count; i++)
         sb.AppendLine("pathRecord" + i + "=" + pathRecords[i]);
@@ -1103,6 +1108,11 @@ void LoadState()
     if (dict.TryGetValue("pathPaused",          out s)) pathPaused          = s == "1";
     if (dict.TryGetValue("pathPausedNavResume", out s)) pathPausedNavResume = s == "1";
     if (dict.TryGetValue("pathIndex",           out s) && int.TryParse(s, out n)) pathIndex = n;
+    if (dict.TryGetValue("goToMode",            out s)) goToMode            = s == "1";
+    if (dict.TryGetValue("goToStage",           out s) && int.TryParse(s, out n)) goToStage = n;
+    if (dict.TryGetValue("goToFinalPosition",   out s) && TryParseV3(s, out v)) _goToFinalPosition = v;
+    if (dict.TryGetValue("goToFinalForward",    out s) && TryParseV3(s, out v)) _goToFinalForward  = v;
+    if (dict.TryGetValue("goToFinalUp",         out s) && TryParseV3(s, out v)) _goToFinalUp       = v;
 
     int pathCount = 0;
     if (dict.TryGetValue("pathCount", out s) && int.TryParse(s, out pathCount) && pathCount > 0)
