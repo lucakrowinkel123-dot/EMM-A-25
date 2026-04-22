@@ -52,6 +52,7 @@ string minerConnectorName = "EMM-A Mi Connector";
 string minerRemoteName = "EMM-A Mi Remote Control";
 string carrierMergerName   = "EMM-A Ca Merger";
 string minerMergerName     = "EMM-A Mi Merger";
+string carrierPbTag        = "EMM-A Ca Prog. Block (Carrier)";
 string minerContainerTag   = "EMM-A Mi ";
 string carrierContainerTag = "EMM-A Ca ";
 bool dockUseMergerAssist = true;
@@ -187,6 +188,7 @@ bool oreTransferActive = false;
 int oreTransferSourceIdx = 0;
 List<IMyTerminalBlock> _oreTransferSources = new List<IMyTerminalBlock>();
 List<IMyTerminalBlock> _oreTransferTargets = new List<IMyTerminalBlock>();
+bool saveAsteroidAfterDock = false;
 
 // Cached block/item lists reused by GetOreAmount to avoid per-call GTS scans and allocations
 List<IMyTerminalBlock> _invBlocks = new List<IMyTerminalBlock>();
@@ -642,16 +644,20 @@ void RemoteCommand (string command)
                 pathTimer.CustomData = "";
             pathRecordCounter = 0;
             pathRecordMineCounter = 0;
+            saveAsteroidAfterDock = false;
             Echo("Path timer cleared.");
             break;
         }
         case "dock":
             if (pathRecordingEnabled)
             {
+                saveAsteroidAfterDock = true;
                 if (!AppendPathRecordLine("dock"))
                     Echo($"Warning: could not write 'dock' to timer '{pathTimerTag}'; timer not found.");
                 StopPathRecording();
             }
+            else
+                saveAsteroidAfterDock = false;
             StartDock();
             break;
         case "undock":
@@ -1437,7 +1443,30 @@ void CompleteDocking(string message, bool transferOre = false)
     ResetMovement();
     Echo(message);
     if (transferOre)
+    {
+        if (saveAsteroidAfterDock)
+        {
+            if (SendCarrierCommand("SaveAsteroid"))
+                Echo("Requested carrier SaveAsteroid.");
+            else
+                Echo($"Warning: carrier PB '{carrierPbTag}' not found; skipping auto SaveAsteroid.");
+            saveAsteroidAfterDock = false;
+        }
         StartOreTransfer();
+    }
+}
+
+bool SendCarrierCommand(string command)
+{
+    var allPbs = new List<IMyProgrammableBlock>();
+    GridTerminalSystem.GetBlocksOfType(allPbs);
+    foreach (var pb in allPbs)
+    {
+        if (pb == Me) continue;
+        if (pb.CustomName.IndexOf(carrierPbTag, StringComparison.OrdinalIgnoreCase) >= 0)
+            return pb.TryRun(command);
+    }
+    return false;
 }
 
 void StartOreTransfer()
