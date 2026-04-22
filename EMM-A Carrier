@@ -78,7 +78,7 @@ IMyTimerBlock _cachedPathTimer;
 IMyTimerBlock _cachedZoneDbTimer;
 
 bool goToMode = false;
-int goToStage = 0; // 1 = flying to safe side-point, 2 = final approach to saved carrier pose
+int goToStage = 0; // 1 = fly side-point, 2 = face saved pos, 3 = fly saved pos, 4 = align saved orientation
 
 public Program()
 {
@@ -314,6 +314,7 @@ void RemoteCommand(string command)
             desiredUp           = Vector3D.Zero;
             goToMode            = false;
             goToStage           = 0;
+            _goToApproachForward = Vector3D.Zero;
             pathMode            = false;
             pathPaused          = false;
             pathPausedNavResume = false;
@@ -893,6 +894,8 @@ void HandleGoTo(string argument)
     _goToFinalPosition = savedPos;
     _goToFinalForward  = savedForward;
     _goToFinalUp       = savedUp;
+    Vector3D approachForward = savedPos - chosenPoint;
+    _goToApproachForward = approachForward.LengthSquared() > 0.001 ? Vector3D.Normalize(approachForward) : savedForward;
 
     Echo($"GoTo: Asteroid {asteroidNum:D3} using {(frontIntersects ? "rear" : "front")} approach point.");
 }
@@ -900,6 +903,7 @@ void HandleGoTo(string argument)
 Vector3D _goToFinalPosition = Vector3D.Zero;
 Vector3D _goToFinalForward  = Vector3D.Zero;
 Vector3D _goToFinalUp       = Vector3D.Zero;
+Vector3D _goToApproachForward = Vector3D.Zero;
 
 void UpdateGoToRunner()
 {
@@ -908,18 +912,37 @@ void UpdateGoToRunner()
 
     if (goToStage == 1 && IsAtTargetPosition(targetPosition))
     {
-        targetPosition = _goToFinalPosition;
-        desiredForward = _goToFinalForward;
+        desiredForward = _goToApproachForward;
         desiredUp      = _goToFinalUp;
         goToStage      = 2;
-        Echo("GoTo: side-point reached. Starting final approach.");
+        Echo("GoTo: side-point reached. Aligning toward saved carrier position.");
         return;
     }
 
-    if (goToStage == 2 && IsAtTargetPose(_goToFinalPosition, _goToFinalForward, _goToFinalUp))
+    if (goToStage == 2 && IsAtTargetPose(targetPosition, _goToApproachForward, _goToFinalUp))
+    {
+        targetPosition = _goToFinalPosition;
+        desiredForward = Vector3D.Zero;
+        desiredUp      = _goToFinalUp;
+        goToStage      = 3;
+        Echo("GoTo: heading to saved carrier position.");
+        return;
+    }
+
+    if (goToStage == 3 && IsAtTargetPosition(_goToFinalPosition))
+    {
+        desiredForward = _goToFinalForward;
+        desiredUp      = _goToFinalUp;
+        goToStage      = 4;
+        Echo("GoTo: position reached. Aligning to saved carrier orientation.");
+        return;
+    }
+
+    if (goToStage == 4 && IsAtTargetPose(_goToFinalPosition, _goToFinalForward, _goToFinalUp))
     {
         goToMode      = false;
         goToStage     = 0;
+        _goToApproachForward = Vector3D.Zero;
         Echo("GoTo: final pose reached.");
     }
 }
@@ -1074,6 +1097,7 @@ void SaveState()
     sb.AppendLine("goToFinalPosition="  + V3ToString(_goToFinalPosition));
     sb.AppendLine("goToFinalForward="   + V3ToString(_goToFinalForward));
     sb.AppendLine("goToFinalUp="        + V3ToString(_goToFinalUp));
+    sb.AppendLine("goToApproachForward=" + V3ToString(_goToApproachForward));
     sb.AppendLine("pathCount="          + pathRecords.Count);
     for (int i = 0; i < pathRecords.Count; i++)
         sb.AppendLine("pathRecord" + i + "=" + pathRecords[i]);
@@ -1113,6 +1137,7 @@ void LoadState()
     if (dict.TryGetValue("goToFinalPosition",   out s) && TryParseV3(s, out v)) _goToFinalPosition = v;
     if (dict.TryGetValue("goToFinalForward",    out s) && TryParseV3(s, out v)) _goToFinalForward  = v;
     if (dict.TryGetValue("goToFinalUp",         out s) && TryParseV3(s, out v)) _goToFinalUp       = v;
+    if (dict.TryGetValue("goToApproachForward", out s) && TryParseV3(s, out v)) _goToApproachForward = v;
 
     int pathCount = 0;
     if (dict.TryGetValue("pathCount", out s) && int.TryParse(s, out pathCount) && pathCount > 0)
